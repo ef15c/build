@@ -4,10 +4,11 @@ BOARDFAMILY="meson-sm1"
 BOARD_MAINTAINER=""
 BOOTCONFIG="odroid-c4_defconfig" # But also 'odroid-hc4_defconfig', see below at UBOOT_TARGET_MAP
 KERNEL_TARGET="current,edge"
+MODULES_BLACKLIST="simpledrm" # SimpleDRM conflicts with Panfrost
 FULL_DESKTOP="no"
 SERIALCON="ttyAML0"
 BOOT_FDT_FILE="amlogic/meson-sm1-odroid-hc4.dtb"
-PACKAGE_LIST_BOARD="mtd-utils lm-sensors fancontrol" # SPI, sensors, manual fan control via 'pwmconfig'
+PACKAGE_LIST_BOARD="lm-sensors fancontrol" # SPI, sensors, manual fan control via 'pwmconfig'
 
 # Newer u-boot for the HC4. There's patches in `board_odroidhc4` for the defconfigs used in the UBOOT_TARGET_MAP below.
 BOOTBRANCH_BOARD="tag:v2023.01"

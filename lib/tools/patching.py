@@ -44,6 +44,7 @@ PATCH_DIRS_TO_APPLY = armbian_utils.parse_env_for_tokens("PATCH_DIRS_TO_APPLY")
 APPLY_PATCHES = armbian_utils.get_from_env("APPLY_PATCHES")
 PATCHES_TO_GIT = armbian_utils.get_from_env("PATCHES_TO_GIT")
 REWRITE_PATCHES = armbian_utils.get_from_env("REWRITE_PATCHES")
+REWRITE_PATCHES_NEEDING_REBASE = armbian_utils.get_from_env("REWRITE_PATCHES_NEEDING_REBASE")
 SPLIT_PATCHES = armbian_utils.get_from_env("SPLIT_PATCHES")
 ALLOW_RECREATE_EXISTING_FILES = armbian_utils.get_from_env("ALLOW_RECREATE_EXISTING_FILES")
 GIT_ARCHEOLOGY = armbian_utils.get_from_env("GIT_ARCHEOLOGY")
@@ -53,6 +54,7 @@ apply_patches_to_git = PATCHES_TO_GIT == "yes"
 git_archeology = GIT_ARCHEOLOGY == "yes"
 fast_archeology = FAST_ARCHEOLOGY == "yes"
 rewrite_patches_in_place = REWRITE_PATCHES == "yes"
+rewrite_only_patches_needing_rebase = REWRITE_PATCHES_NEEDING_REBASE == "yes"
 split_patches = SPLIT_PATCHES == "yes"
 apply_options = {
 	"allow_recreate_existing_files": (ALLOW_RECREATE_EXISTING_FILES == "yes"),
@@ -249,6 +251,8 @@ total_patches = len(VALID_PATCHES)
 any_failed_to_apply = False
 failed_to_apply_list = []
 
+autopatcher_descriptions: list[dt_makefile_patcher.AutomaticPatchDescription] = []
+
 if apply_patches:
 	log.debug("Cleaning target git directory...")
 	git_repo = Repo(GIT_WORK_DIR, odbt=GitCmdObjectDB)
@@ -274,7 +278,14 @@ if apply_patches:
 				try:
 					BASE_GIT_REVISION = git_repo.branches[BASE_GIT_TAG].commit.hexsha
 				except IndexError:
-					raise Exception(f"BASE_GIT_TAG={BASE_GIT_TAG} is neither a tag nor a branch")
+					# not a branch either, try as a hexsha:
+					try:
+						# see if the sha1 exists in the repo
+						commit = git_repo.commit(BASE_GIT_TAG)
+						log.debug(f"Found commit '{commit}' for BASE_GIT_TAG={BASE_GIT_TAG}")
+						BASE_GIT_REVISION = BASE_GIT_TAG
+					except:
+						raise Exception(f"BASE_GIT_TAG={BASE_GIT_TAG} is neither a tag nor a branch nor a SHA1")
 
 			log.debug(f"Found BASE_GIT_REVISION={BASE_GIT_REVISION} for BASE_GIT_TAG={BASE_GIT_TAG}")
 
@@ -311,11 +322,11 @@ if apply_patches:
 		if one_patch.applied_ok and apply_patches_to_git:
 			committed = one_patch.commit_changes_to_git(git_repo, (not rewrite_patches_in_place), split_patches, pconfig)
 
-			if not split_patches:
+			if not split_patches and (committed is not None):
 				commit_hash = committed['commit_hash']
 				one_patch.git_commit_hash = commit_hash
 
-				if rewrite_patches_in_place:
+				if rewrite_patches_in_place and not (one_patch.parent.patch_dir.is_autogen_dir):
 					rewritten_patch = patching_utils.export_commit_as_patch(git_repo, commit_hash)
 					one_patch.rewritten_patch = rewritten_patch
 
@@ -326,15 +337,15 @@ if apply_patches:
 
 	# Include the dts/dtsi marked dts-directories in the config
 	if pconfig.has_dts_directories:
-		dt_makefile_patcher.copy_bare_files(autopatcher_params, "dt")
+		autopatcher_descriptions.extend(dt_makefile_patcher.copy_bare_files(autopatcher_params, "dt"))
 
 	# Include the overlay stuff
-	if pconfig.has_dts_directories:
-		dt_makefile_patcher.copy_bare_files(autopatcher_params, "overlay")
+	if pconfig.has_overlay_directories:
+		autopatcher_descriptions.extend(dt_makefile_patcher.copy_bare_files(autopatcher_params, "overlay"))
 
 	# Autopatch the Makefile(s) according to the config
 	if pconfig.has_autopatch_makefile_dt_configs:
-		dt_makefile_patcher.auto_patch_all_dt_makefiles(autopatcher_params)
+		autopatcher_descriptions.extend(dt_makefile_patcher.auto_patch_all_dt_makefiles(autopatcher_params))
 
 	if rewrite_patches_in_place:
 		# Now; we need to write the patches to files.
@@ -345,6 +356,16 @@ if apply_patches:
 				log.warning(f"Skipping patch {one_patch} from rewrite because it was not applied successfully.")
 				continue
 
+			if one_patch.rewritten_patch is None:
+				log.warning(f"Skipping patch {one_patch} from rewrite because it was not rewritten.")
+				continue
+			
+			# Skip the patch if it doesn't need rebasing
+			if rewrite_only_patches_needing_rebase:
+				if "needs_rebase" not in one_patch.problems:
+					log.info(f"Skipping patch {one_patch} from rewrite because it doesn't need a rebase.")
+					continue
+
 			if one_patch.parent not in patch_files_by_parent:
 				patch_files_by_parent[one_patch.parent] = []
 			patch_files_by_parent[one_patch.parent].append(one_patch)
@@ -352,8 +373,8 @@ if apply_patches:
 		for parent in patch_files_by_parent:
 			patches = patch_files_by_parent[parent]
 			parent.rewrite_patch_file(patches)
-		UNAPPLIED_PATCHES = [one_patch for one_patch in VALID_PATCHES if not one_patch.applied_ok]
-		for failed_patch in UNAPPLIED_PATCHES:
+		FAILED_PATCHES = [one_patch for one_patch in VALID_PATCHES if (not one_patch.applied_ok) or (one_patch.rewritten_patch is None)]
+		for failed_patch in FAILED_PATCHES:
 			log.info(
 				f"Consider removing {failed_patch.parent.full_file_path()}(:{failed_patch.counter}); "
 				f"it was not applied successfully.")
@@ -429,15 +450,22 @@ console = Console(color_system="standard", width=console_width, highlight=False)
 # Use Rich to print a summary of the patches
 if True:
 	summary_table = Table(title=f"Summary of {PATCH_TYPE} patches", show_header=True, show_lines=True, box=rich.box.ROUNDED)
-	summary_table.add_column("Patch / Status", overflow="fold", min_width=25, max_width=35)
+	summary_table.add_column("Patch / Status", overflow="fold", min_width=25)
 	summary_table.add_column("Diffstat / files", max_width=35)
-	summary_table.add_column("Author / Subject", overflow="ellipsis")
+	summary_table.add_column("Author / Subject", overflow="ellipsis", min_width=25, max_width=40)
 	for one_patch in VALID_PATCHES:
 		summary_table.add_row(
 			# (one_patch.markdown_name(skip_markdown=True)),  # + " " + one_patch.markdown_problems()
 			one_patch.rich_name_status(),
 			(one_patch.text_diffstats() + " " + one_patch.text_files()),
 			(one_patch.text_author() + ": " + one_patch.text_subject())
+		)
+	# Extra items for auto-patched stuff
+	for autopatcher_description in autopatcher_descriptions:
+		summary_table.add_row(
+			autopatcher_description.rich_name_status(),
+			autopatcher_description.rich_diffstats(),
+			autopatcher_description.rich_subject()
 		)
 	console.print(summary_table)
 

@@ -72,20 +72,7 @@ function artifact_kernel_prepare_version() {
 	declare short_hash_size=4
 
 	declare -A GIT_INFO_KERNEL=([GIT_SOURCE]="${KERNELSOURCE}" [GIT_REF]="${KERNELBRANCH}")
-
-	if [[ "${KERNEL_SKIP_MAKEFILE_VERSION:-"no"}" == "yes" ]]; then
-		display_alert "Skipping Makefile version for kernel" "due to KERNEL_SKIP_MAKEFILE_VERSION=yes" "info"
-		run_memoized GIT_INFO_KERNEL "git2info" memoized_git_ref_to_info
-	else
-		run_memoized GIT_INFO_KERNEL "git2info" memoized_git_ref_to_info "include_makefile_body"
-	fi
-	debug_dict GIT_INFO_KERNEL
-
-	# Sanity check, the SHA1 gotta be sane.
-	[[ "${GIT_INFO_KERNEL[SHA1]}" =~ ^[0-9a-f]{40}$ ]] || exit_with_error "SHA1 is not sane: '${GIT_INFO_KERNEL[SHA1]}'"
-
-	# Set a readonly global with the kernel SHA1. Will be used later for the drivers cache_key.
-	declare -g -r KERNEL_GIT_SHA1="${GIT_INFO_KERNEL[SHA1]}"
+	obtain_kernel_git_info_and_makefile # this populates GIT_INFO_KERNEL and sets KERNEL_GIT_SHA1 readonly global
 
 	declare short_sha1="${GIT_INFO_KERNEL[SHA1]:0:${short_hash_size}}"
 
@@ -156,7 +143,7 @@ function artifact_kernel_prepare_version() {
 	declare var_config_hash_short="${vars_config_hash:0:${short_hash_size}}"
 
 	# Hash the extension hooks
-	declare -a extension_hooks_to_hash=("pre_package_kernel_image")
+	declare -a extension_hooks_to_hash=("pre_package_kernel_image" "kernel_copy_extra_sources" "pre_package_kernel_headers")
 	declare -a extension_hooks_hashed=("$(dump_extension_method_sources_functions "${extension_hooks_to_hash[@]}")")
 	declare hash_hooks="undetermined"
 	hash_hooks="$(echo "${extension_hooks_hashed[@]}" | sha256sum | cut -d' ' -f1)"
@@ -195,12 +182,14 @@ function artifact_kernel_prepare_version() {
 
 	# map what "compile_kernel()" will produce - legacy deb names and versions
 
-	# linux-image is always produced...
-	artifact_map_packages=(["linux-image"]="linux-image-${BRANCH}-${LINUXFAMILY}")
+	# linux-image is always produced... unless we're in DTB-only mode
+	if [[ "${KERNEL_DTB_ONLY}" != "yes" ]]; then
+		artifact_map_packages=(["linux-image"]="linux-image-${BRANCH}-${LINUXFAMILY}")
 
-	# some/most kernels have also working headers...
-	if [[ "${KERNEL_HAS_WORKING_HEADERS:-"no"}" == "yes" ]]; then
-		artifact_map_packages+=(["linux-headers"]="linux-headers-${BRANCH}-${LINUXFAMILY}")
+		# some/most kernels have also working headers...
+		if [[ "${KERNEL_HAS_WORKING_HEADERS:-"no"}" == "yes" ]]; then
+			artifact_map_packages+=(["linux-headers"]="linux-headers-${BRANCH}-${LINUXFAMILY}")
+		fi
 	fi
 
 	# x86, specially, does not have working dtbs...
@@ -208,12 +197,43 @@ function artifact_kernel_prepare_version() {
 		artifact_map_packages+=(["linux-dtb"]="linux-dtb-${BRANCH}-${LINUXFAMILY}")
 	fi
 
-	artifact_name="kernel-${LINUXFAMILY}-${BRANCH}"
+	artifact_map_packages+=(["linux-libc-dev"]="linux-libc-dev-${BRANCH}-${LINUXFAMILY}")
+
+	artifact_name="kernel-${LINUXFAMILY}-${BRANCH}" # default name of regular artifact
+
+	# Separate artifact name if we're in DTB-only mode, so stuff doesn't get mixed up later
+	if [[ "${KERNEL_DTB_ONLY}" == "yes" ]]; then
+		artifact_name="kernel-dtb-only-${LINUXFAMILY}-${BRANCH}"
+	fi
+
 	artifact_type="deb-tar" # this triggers processing of .deb files in the maps to produce a tarball
 	artifact_deb_repo="global"
 	artifact_deb_arch="${ARCH}"
 
 	return 0
+}
+
+# Input: associative array GIT_INFO_KERNEL, with GIT_SOURCE and GIT_REF members
+function obtain_kernel_git_info_and_makefile() {
+	declare -i kernel_git_cache_ttl_seconds=3600 # by default
+	if [[ "${KERNEL_GIT_CACHE_TTL}" != "" ]]; then
+		kernel_git_cache_ttl_seconds="${KERNEL_GIT_CACHE_TTL}"
+		display_alert "Setting kernel git cache TTL to" "${kernel_git_cache_ttl_seconds}" "info"
+	fi
+
+	if [[ "${KERNEL_SKIP_MAKEFILE_VERSION:-"no"}" == "yes" ]]; then
+		display_alert "Skipping Makefile version for kernel" "due to KERNEL_SKIP_MAKEFILE_VERSION=yes" "info"
+		memoize_cache_ttl=$kernel_git_cache_ttl_seconds run_memoized GIT_INFO_KERNEL "git2info" memoized_git_ref_to_info
+	else
+		memoize_cache_ttl=$kernel_git_cache_ttl_seconds run_memoized GIT_INFO_KERNEL "git2info" memoized_git_ref_to_info "include_makefile_body"
+	fi
+	debug_dict GIT_INFO_KERNEL
+
+	# Sanity check, the SHA1 gotta be sane.
+	[[ "${GIT_INFO_KERNEL[SHA1]}" =~ ^[0-9a-f]{40}$ ]] || exit_with_error "SHA1 is not sane: '${GIT_INFO_KERNEL[SHA1]}'"
+
+	# Set a readonly global with the kernel SHA1. Will be used later for the drivers cache_key.
+	declare -g -r KERNEL_GIT_SHA1="${GIT_INFO_KERNEL[SHA1]}"
 }
 
 function artifact_kernel_build_from_sources() {
@@ -234,7 +254,7 @@ function artifact_kernel_cli_adapter_pre_run() {
 function artifact_kernel_cli_adapter_config_prep() {
 	# Sanity check / cattle guard
 	# If KERNEL_CONFIGURE=yes, or CREATE_PATCHES=yes, user must have used the correct CLI commands, and only add those params.
-	if [[ "${KERNEL_CONFIGURE}" == "yes" && "${ARMBIAN_COMMAND}" != "kernel-config" ]]; then
+	if [[ "${KERNEL_CONFIGURE}" == "yes" && "${ARMBIAN_COMMAND}" != *kernel-config ]]; then
 		exit_with_error "KERNEL_CONFIGURE=yes is not supported anymore. Please use the new 'kernel-config' CLI command. Current command: '${ARMBIAN_COMMAND}'"
 	fi
 

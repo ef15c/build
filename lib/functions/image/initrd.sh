@@ -29,7 +29,8 @@ update_initramfs() {
 	local logging_filter=""
 	if [[ "${SHOW_DEBUG}" == "yes" ]]; then
 		initrd_debug="v"
-		logging_filter="2>&1 | { grep --line-buffered -v -e '.xz' -e 'ORDER ignored' -e 'Adding binary ' -e 'Adding module ' -e 'Adding firmware ' -e 'microcode bundle' -e ', pf_mask' || true ; }"
+		# disabled; if debugging, we want the full output, even if it is huge.
+		# logging_filter="2>&1 | { grep --line-buffered -v -e '.xz' -e 'ORDER ignored' -e 'Adding binary ' -e 'Adding module ' -e 'Adding firmware ' -e 'microcode bundle' -e ', pf_mask' || true ; }"
 	fi
 	if [ "$target_dir" != "" ]; then
 		initrd_kern_ver="$(basename "$target_dir")"
@@ -54,6 +55,7 @@ update_initramfs() {
 	initrd_cache_last_manifest_filepath="${SRC}/cache/initrd/initrd.manifest-${initrd_kern_ver}.last.manifest"
 	initrd_files_to_hash=("${chroot_target}/usr/bin/bash" "${chroot_target}/etc/initramfs")
 	initrd_files_to_hash+=("${chroot_target}/etc/initramfs-tools" "${chroot_target}/usr/share/initramfs-tools/")
+	initrd_files_to_hash+=("${chroot_target}/etc/modprobe.d") # for MODULES_BLACKLIST
 
 	if [[ $CRYPTROOT_ENABLE == yes ]]; then
 		if [[ $CRYPTROOT_SSH_UNLOCK == yes ]]; then
@@ -86,8 +88,8 @@ update_initramfs() {
 		fi
 
 		# Convert to bootscript expected format, by calling into the script manually.
-		if [[ -f "${chroot_target}"/etc/initramfs/post-update.d/99-uboot ]]; then
-			chroot_custom "$chroot_target" /etc/initramfs/post-update.d/99-uboot "${initrd_kern_ver}" "/boot/initrd.img-${initrd_kern_ver}"
+		if [[ -d "${chroot_target}"/etc/initramfs/post-update.d/ ]]; then
+			chroot_custom "$chroot_target" /usr/bin/run-parts -a "${initrd_kern_ver}" -a "/boot/initrd.img-${initrd_kern_ver}" /etc/initramfs/post-update.d/
 		fi
 	else
 		display_alert "Cache miss for initrd cache" "${initrd_cache_key}" "debug"
@@ -111,9 +113,11 @@ update_initramfs() {
 		# clean old cache files so they don't pile up forever.
 		if [[ "${SHOW_DEBUG}" == "yes" ]]; then
 			display_alert "Showing which initrd caches would be removed/expired" "initrd" "debug"
-			# 60: keep the last 30 initrd + manifest pairs. this should be higher than the total number of kernels we support, otherwise churn will be high
-			find "${SRC}/cache/initrd" -type f -printf "%T@ %p\\n" | sort -n -r | sed "1,60d" | xargs rm -fv
+			# 80: keep the last 40 initrd + manifest pairs. this should be higher than the total number of kernels we support, otherwise churn will be high
+			find "${SRC}/cache/initrd" -type f -printf "%T@ %p\\n" | sort -n -r | sed "1,80d"
 		fi
+
+		find "${SRC}/cache/initrd" -type f -printf "%T@ %p\\n" | sort -n -r | sed "1,80d" | xargs rm -fv
 	fi
 
 	display_alert "Re-enabling" "initramfs-tools hook for kernel"

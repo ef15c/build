@@ -48,6 +48,10 @@ function run_tool_oras() {
 	case "$MACHINE" in
 		*aarch64*) ORAS_ARCH="arm64" ;;
 		*x86_64*) ORAS_ARCH="amd64" ;;
+		*riscv64*)
+			ORAS_ARCH="riscv64"
+			ORAS_VERSION="1.2.0-beta.1" # Only v1.2.0-beta.1+ has risv64 support
+			;;
 		*)
 			exit_with_error "unknown arch: $MACHINE"
 			;;
@@ -55,7 +59,7 @@ function run_tool_oras() {
 
 	declare ORAS_FN="oras_${ORAS_VERSION}_${ORAS_OS}_${ORAS_ARCH}"
 	declare ORAS_FN_TARXZ="${ORAS_FN}.tar.gz"
-	declare DOWN_URL="https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/${ORAS_FN_TARXZ}"
+	declare DOWN_URL="${GITHUB_SOURCE:-"https://github.com"}/oras-project/oras/releases/download/v${ORAS_VERSION}/${ORAS_FN_TARXZ}"
 	declare ORAS_BIN="${DIR_ORAS}/${ORAS_FN}"
 	declare ACTUAL_VERSION
 

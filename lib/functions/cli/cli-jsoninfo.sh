@@ -111,6 +111,7 @@ function cli_json_info_run() {
 		declare TARGETS_OUTPUT_FILE="${BASE_INFO_OUTPUT_DIR}/all-targets.json"
 		declare IMAGE_INFO_FILE="${BASE_INFO_OUTPUT_DIR}/image-info.json"
 		declare IMAGE_INFO_CSV_FILE="${BASE_INFO_OUTPUT_DIR}/image-info.csv"
+		declare INVENTORY_BOARDS_CSV_FILE="${BASE_INFO_OUTPUT_DIR}/boards-inventory.csv"
 		declare REDUCED_ARTIFACTS_FILE="${BASE_INFO_OUTPUT_DIR}/artifacts-reduced.json"
 		declare ARTIFACTS_INFO_FILE="${BASE_INFO_OUTPUT_DIR}/artifacts-info.json"
 		declare ARTIFACTS_INFO_UPTODATE_FILE="${BASE_INFO_OUTPUT_DIR}/artifacts-info-uptodate.json"
@@ -170,6 +171,13 @@ function cli_json_info_run() {
 		if [[ ! -f "${IMAGE_INFO_CSV_FILE}" ]]; then
 			display_alert "Generating CSV info" "info.csv" "info"
 			run_host_command_logged "${PYTHON3_VARS[@]}" "${PYTHON3_INFO[BIN]}" "${INFO_TOOLS_DIR}"/json2csv.py "<" "${IMAGE_INFO_FILE}" ">" ${IMAGE_INFO_CSV_FILE}
+		fi
+
+		if [[ "${ARMBIAN_COMMAND}" == "inventory-boards" ]]; then
+			display_alert "Preparing" "inventory-boards" "info"
+			run_host_command_logged "${PYTHON3_VARS[@]}" "${PYTHON3_INFO[BIN]}" "${INFO_TOOLS_DIR}"/inventory-boards-csv.py "<" "${IMAGE_INFO_FILE}" ">" ${INVENTORY_BOARDS_CSV_FILE}
+			display_alert "Done with" "inventory-boards: ${INVENTORY_BOARDS_CSV_FILE}" "info"
+			exit 0
 		fi
 
 		if [[ "${ARMBIAN_COMMAND}" == "targets-dashboard" ]]; then
@@ -248,7 +256,9 @@ function cli_json_info_run() {
 			if [[ ! -f "${GHA_ALL_ARTIFACTS_JSON_MATRIX_FILE}" ]]; then
 				run_host_command_logged "${PYTHON3_VARS[@]}" "${PYTHON3_INFO[BIN]}" "${INFO_TOOLS_DIR}"/output-gha-matrix.py artifacts "${OUTDATED_ARTIFACTS_IMAGES_FILE}" "${MATRIX_ARTIFACT_CHUNKS}" ">" "${GHA_ALL_ARTIFACTS_JSON_MATRIX_FILE}"
 			fi
-			github_actions_add_output "artifact-matrix" "$(cat "${GHA_ALL_ARTIFACTS_JSON_MATRIX_FILE}")"
+
+			# rpardini: disabled; we're using a chunked version now, and the GH output is directly set by the Python script, not here.
+			# github_actions_add_output "artifact-matrix" "$(cat "${GHA_ALL_ARTIFACTS_JSON_MATRIX_FILE}")"
 
 			display_alert "Generating GHA matrix for images" "output-gha-matrix :: images" "info"
 			declare GHA_ALL_IMAGES_JSON_MATRIX_FILE="${BASE_INFO_OUTPUT_DIR}/gha-all-images-matrix.json"
@@ -258,7 +268,9 @@ function cli_json_info_run() {
 				export IMAGES_ONLY_OUTDATED_ARTIFACTS="${IMAGES_ONLY_OUTDATED_ARTIFACTS:-"no"}"
 				run_host_command_logged "${PYTHON3_VARS[@]}" "${PYTHON3_INFO[BIN]}" "${INFO_TOOLS_DIR}"/output-gha-matrix.py images "${OUTDATED_ARTIFACTS_IMAGES_FILE}" "${MATRIX_IMAGE_CHUNKS}" ">" "${GHA_ALL_IMAGES_JSON_MATRIX_FILE}"
 			fi
-			github_actions_add_output "image-matrix" "$(cat "${GHA_ALL_IMAGES_JSON_MATRIX_FILE}")"
+
+			# rpardini: disabled; we're using a chunked version now, and the GH output is directly set by the Python script, not here.
+			# github_actions_add_output "image-matrix" "$(cat "${GHA_ALL_IMAGES_JSON_MATRIX_FILE}")"
 		fi
 
 		### a secondary stage, which only makes sense to be run inside GHA, and as such should be split in a different CLI or under a flag.

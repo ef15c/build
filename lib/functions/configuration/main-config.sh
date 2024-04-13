@@ -38,16 +38,25 @@ function do_main_configuration() {
 		exit_with_error "REVISION must begin with a digit, got '${REVISION}'"
 	fi
 
-	[[ -z $VENDOR ]] && VENDOR="Armbian"
-	[[ -z $VENDORURL ]] && VENDORURL="https://www.armbian.com"
-	[[ -z $VENDORSUPPORT ]] && VENDORSUPPORT="https://forum.armbian.com"
-	[[ -z $VENDORPRIVACY ]] && VENDORPRIVACY="https://www.armbian.com"
-	[[ -z $VENDORBUGS ]] && VENDORBUGS="https://www.armbian.com/bugs"
+	# Armbian image is set as unofficial if build manually or without declaring from outside
+	[[ -z $VENDOR ]] && VENDOR="Armbian-unofficial"
+
+	# Use framework defaults for community Armbian images and unsupported distribution when building Armbian distribution
+	if [[ ${VENDOR} == "Armbian" ]] && [[ ${BOARD_TYPE} != "conf" || $(cat $SRC/config/distributions/$RELEASE/support) != "supported" ]]; then
+		VENDORURL="https://www.armbian.com/"
+		unset VENDORSUPPORT,VENDORPRIVACY,VENDORBUGS,VENDORLOGO,ROOTPWD,MAINTAINER,MAINTAINERMAIL
+	fi
+
+	[[ -z $VENDORURL ]] && VENDORURL="https://duckduckgo.com/"
+	[[ -z $VENDORSUPPORT ]] && VENDORSUPPORT="https://community.armbian.com/"
+	[[ -z $VENDORPRIVACY ]] && VENDORPRIVACY="https://duckduckgo.com/"
+	[[ -z $VENDORBUGS ]] && VENDORBUGS="https://armbian.atlassian.net/"
+	[[ -z $VENDORDOCS ]] && VENDORDOCS="https://docs.armbian.com/"
 	[[ -z $VENDORLOGO ]] && VENDORLOGO="armbian-logo"
-	[[ -z $ROOTPWD ]] && ROOTPWD="1234"                                  # Must be changed @first login
-	[[ -z $MAINTAINER ]] && MAINTAINER="Igor Pecovnik"                   # deb signature
-	[[ -z $MAINTAINERMAIL ]] && MAINTAINERMAIL="igor.pecovnik@****l.com" # deb signature
-	DEST_LANG="${DEST_LANG:-"en_US.UTF-8"}"                              # en_US.UTF-8 is default locale for target
+	[[ -z $ROOTPWD ]] && ROOTPWD="1234"                                       # Must be changed @first login
+	[[ -z $MAINTAINER ]] && MAINTAINER="John Doe"                             # deb signature
+	[[ -z $MAINTAINERMAIL ]] && MAINTAINERMAIL="john.doe@somewhere.on.planet" # deb signature
+	DEST_LANG="${DEST_LANG:-"en_US.UTF-8"}"                                   # en_US.UTF-8 is default locale for target
 	display_alert "DEST_LANG..." "DEST_LANG: ${DEST_LANG}" "debug"
 
 	declare -g SKIP_EXTERNAL_TOOLCHAINS="${SKIP_EXTERNAL_TOOLCHAINS:-yes}" # don't use any external toolchains, by default.
@@ -129,6 +138,11 @@ function do_main_configuration() {
 			;;
 	esac
 
+	# Check if the filesystem type is supported by the build host
+	if [[ $CONFIG_DEFS_ONLY != yes ]]; then # don't waste time if only gathering config defs
+		check_filesystem_compatibility_on_host
+	fi
+
 	# Support for LUKS / cryptroot
 	if [[ $CRYPTROOT_ENABLE == yes ]]; then
 		enable_extension "fs-cryptroot-support" # add the tooling needed, cryptsetup
@@ -159,82 +173,77 @@ function do_main_configuration() {
 
 	esac
 
-	# used by multiple sources - reduce code duplication
-	[[ $USE_MAINLINE_GOOGLE_MIRROR == yes ]] && MAINLINE_MIRROR=google
+	# Defaults... # @TODO: why?
+	declare -g -r MAINLINE_UBOOT_DIR='u-boot'
 
-	# URL for the git bundle used to "bootstrap" local git copies without too much server load. This applies independently of git mirror below.
-	declare -g MAINLINE_KERNEL_TORVALDS_BUNDLE_URL="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/clone.bundle" # this is plain torvalds, single branch
-	declare -g MAINLINE_KERNEL_STABLE_BUNDLE_URL="https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/clone.bundle"     # this is all stable branches. with tags!
-	declare -g MAINLINE_KERNEL_COLD_BUNDLE_URL="${MAINLINE_KERNEL_COLD_BUNDLE_URL:-${MAINLINE_KERNEL_TORVALDS_BUNDLE_URL}}"          # default to Torvalds; everything else is small enough with this
+	# pre-calculate mirrors. important: this sets _SOURCE variants that might be used in common.conf to default things to mainline, but using mirror.
+	# @TODO: setting them here allows family/board code (and hooks) to read them and embed them into configuration, which is bad: it might end up without the mirror.
+	[[ $USE_MAINLINE_GOOGLE_MIRROR == yes ]] && MAINLINE_MIRROR=google
 
 	case $MAINLINE_MIRROR in
 		google)
-			MAINLINE_KERNEL_SOURCE='https://kernel.googlesource.com/pub/scm/linux/kernel/git/stable/linux-stable'
-			MAINLINE_FIRMWARE_SOURCE='https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware.git'
+			declare -g -r MAINLINE_KERNEL_SOURCE='https://kernel.googlesource.com/pub/scm/linux/kernel/git/stable/linux-stable'
+			declare -g -r MAINLINE_FIRMWARE_SOURCE='https://kernel.googlesource.com/pub/scm/linux/kernel/git/firmware/linux-firmware.git'
 			;;
 		tuna)
-			MAINLINE_KERNEL_SOURCE='https://mirrors.tuna.tsinghua.edu.cn/git/linux-stable.git'
-			MAINLINE_FIRMWARE_SOURCE='https://mirrors.tuna.tsinghua.edu.cn/git/linux-firmware.git'
+			declare -g -r MAINLINE_KERNEL_SOURCE='https://mirrors.tuna.tsinghua.edu.cn/git/linux-stable.git'
+			declare -g -r MAINLINE_FIRMWARE_SOURCE='https://mirrors.tuna.tsinghua.edu.cn/git/linux-firmware.git'
 			;;
 		bfsu)
-			MAINLINE_KERNEL_SOURCE='https://mirrors.bfsu.edu.cn/git/linux-stable.git'
-			MAINLINE_FIRMWARE_SOURCE='https://mirrors.bfsu.edu.cn/git/linux-firmware.git'
+			declare -g -r MAINLINE_KERNEL_SOURCE='https://mirrors.bfsu.edu.cn/git/linux-stable.git'
+			declare -g -r MAINLINE_FIRMWARE_SOURCE='https://mirrors.bfsu.edu.cn/git/linux-firmware.git'
 			;;
 		*)
-			MAINLINE_KERNEL_SOURCE='https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git' # "linux-stable" was renamed to "linux"
-			MAINLINE_FIRMWARE_SOURCE='https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git'
+			declare -g -r MAINLINE_KERNEL_SOURCE='https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git' # "linux-stable" was renamed to "linux"
+			declare -g -r MAINLINE_FIRMWARE_SOURCE='https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git'
 			;;
 	esac
 
-	MAINLINE_KERNEL_DIR='linux-mainline'
-
-	[[ $USE_GITHUB_UBOOT_MIRROR == yes ]] && UBOOT_MIRROR=github
+	[[ $USE_GITHUB_UBOOT_MIRROR == yes ]] && UBOOT_MIRROR=github # legacy compatibility?
 
 	case $UBOOT_MIRROR in
 		gitee)
-			MAINLINE_UBOOT_SOURCE='https://gitee.com/mirrors/u-boot.git'
+			declare -g -r MAINLINE_UBOOT_SOURCE='https://gitee.com/mirrors/u-boot.git'
 			;;
 		denx)
-			MAINLINE_UBOOT_SOURCE='https://source.denx.de/u-boot/u-boot.git'
+			declare -g -r MAINLINE_UBOOT_SOURCE='https://source.denx.de/u-boot/u-boot.git'
 			;;
 		*)
-			MAINLINE_UBOOT_SOURCE='https://github.com/u-boot/u-boot'
+			declare -g -r MAINLINE_UBOOT_SOURCE='https://github.com/u-boot/u-boot'
 			;;
 	esac
 
-	MAINLINE_UBOOT_DIR='u-boot'
-
 	case $GITHUB_MIRROR in
 		fastgit)
-			GITHUB_SOURCE='https://hub.fastgit.xyz'
+			declare -g -r GITHUB_SOURCE='https://hub.fastgit.xyz'
 			;;
 		ghproxy)
-			GITHUB_SOURCE='https://ghproxy.com/https://github.com'
+			[[ -z $GHPROXY_ADDRESS ]] && GHPROXY_ADDRESS=mirror.ghproxy.com
+			declare -g -r GITHUB_SOURCE="https://${GHPROXY_ADDRESS}/https://github.com"
 			;;
 		gitclone)
-			GITHUB_SOURCE='https://gitclone.com/github.com'
+			declare -g -r GITHUB_SOURCE='https://gitclone.com/github.com'
 			;;
 		*)
-			GITHUB_SOURCE='https://github.com'
+			declare -g -r GITHUB_SOURCE='https://github.com'
 			;;
 	esac
 
 	case $GHCR_MIRROR in
 		dockerproxy)
-			GHCR_SOURCE='ghcr.dockerproxy.com'
+			declare -g -r GHCR_SOURCE='ghcr.dockerproxy.com'
 			;;
 		*)
-			GHCR_SOURCE='ghcr.io'
+			declare -g -r GHCR_SOURCE='ghcr.io'
 			;;
 	esac
 
 	# Let's set default data if not defined in board configuration above
 	[[ -z $OFFSET ]] && OFFSET=4 # offset to 1st partition (we use 4MiB boundaries by default)
-	[[ -z $ARCH ]] && ARCH=armhf # makes little sense to default to anything...
-	ATF_COMPILE=yes
+	[[ -z $ARCH ]] && ARCH=armhf # makes little sense to default to anything... # @TODO: remove
+	ATF_COMPILE=yes              # @TODO: move to armhf/arm64
 	[[ -z $WIREGUARD ]] && WIREGUARD="yes"
 	[[ -z $EXTRAWIFI ]] && EXTRAWIFI="yes"
-	[[ -z $SKIP_BOOTSPLASH ]] && SKIP_BOOTSPLASH="no"
 	[[ -z $PLYMOUTH ]] && PLYMOUTH="yes"
 	[[ -z $AUFS ]] && AUFS="yes"
 	[[ -z $IMAGE_PARTITION_TABLE ]] && IMAGE_PARTITION_TABLE="msdos"
@@ -249,7 +258,6 @@ function do_main_configuration() {
 	source_family_config_and_arch
 
 	if [[ "$HAS_VIDEO_OUTPUT" == "no" ]]; then
-		SKIP_BOOTSPLASH="yes"
 		PLYMOUTH="no"
 		[[ $BUILD_DESKTOP != "no" ]] && exit_with_error "HAS_VIDEO_OUTPUT is set to no. So we shouldn't build desktop environment"
 	fi
@@ -266,6 +274,7 @@ function do_main_configuration() {
 		Since the family can override values from the user configuration and the board configuration,
 		it is often used to in turn override those.
 	POST_FAMILY_CONFIG
+	track_general_config_variables "after post_family_config hooks"
 
 	# A secondary post_family_config hook, this time with the BRANCH in the name, lowercase.
 	call_extension_method "post_family_config_branch_${BRANCH,,}" <<- 'POST_FAMILY_CONFIG_PER_BRANCH'
@@ -275,11 +284,14 @@ function do_main_configuration() {
 		The sole purpose of this is to avoid "case ... esac for $BRANCH" in the board configuration,
 		allowing separate functions for different branches. You're welcome.
 	POST_FAMILY_CONFIG_PER_BRANCH
+	track_general_config_variables "after post_family_config_branch hooks"
 
 	# Lets make some variables readonly.
 	# We don't want anything changing them, it's exclusively for family config.
 	declare -g -r PACKAGE_LIST_FAMILY="${PACKAGE_LIST_FAMILY}"
 	declare -g -r PACKAGE_LIST_FAMILY_REMOVE="${PACKAGE_LIST_FAMILY_REMOVE}"
+
+	if [[ $RELEASE == trixie || $ARCH == riscv64 ]]; then remove_packages "cpufrequtils"; fi # this will remove from rootfs as well
 
 	display_alert "Done with do_main_configuration" "do_main_configuration" "debug"
 }
@@ -289,14 +301,13 @@ function do_extra_configuration() {
 	[[ -z $UBOOT_USE_GCC ]] && exit_with_error "Error in configuration: UBOOT_USE_GCC is unset"
 	[[ -z $KERNEL_USE_GCC ]] && exit_with_error "Error in configuration: KERNEL_USE_GCC is unset"
 
-	declare BOOTCONFIG_VAR_NAME="BOOTCONFIG_${BRANCH^^}"
+	declare BOOTCONFIG_VAR_NAME="BOOTCONFIG_${BRANCH^^}" # Branch name, uppercase
+	BOOTCONFIG_VAR_NAME=${BOOTCONFIG_VAR_NAME//-/_}      # Replace dashes with underscores
 	[[ -n ${!BOOTCONFIG_VAR_NAME} ]] && BOOTCONFIG=${!BOOTCONFIG_VAR_NAME}
-	[[ -z $LINUXCONFIG ]] && LINUXCONFIG="linux-${LINUXFAMILY}-${BRANCH}"
-	[[ -z $BOOTPATCHDIR ]] && BOOTPATCHDIR="u-boot-$LINUXFAMILY"
+	[[ -z $BOOTPATCHDIR ]] && BOOTPATCHDIR="u-boot-$LINUXFAMILY" # @TODO move to hook
 	[[ -z $ATFPATCHDIR ]] && ATFPATCHDIR="atf-$LINUXFAMILY"
-	[[ -z $KERNELPATCHDIR ]] && KERNELPATCHDIR="$LINUXFAMILY-$BRANCH"
 
-	if [[ "$RELEASE" =~ ^(focal|jammy|kinetic|lunar)$ ]]; then
+	if [[ "$RELEASE" =~ ^(focal|jammy|kinetic|lunar|mantic|noble)$ ]]; then
 		DISTRIBUTION="Ubuntu"
 	else
 		DISTRIBUTION="Debian"
@@ -348,6 +359,7 @@ function do_extra_configuration() {
 	if [[ -f $USERPATCHES_PATH/lib.config ]]; then
 		display_alert "Using user configuration override" "$USERPATCHES_PATH/lib.config" "info"
 		source "$USERPATCHES_PATH"/lib.config
+		track_general_config_variables "after sourcing lib.config"
 	fi
 
 	# Prepare array for extensions to fill in.
@@ -360,6 +372,7 @@ function do_extra_configuration() {
 		It is called after sourcing the `lib.config` file if it exists,
 		but before assembling any package lists.
 	USER_CONFIG
+	track_general_config_variables "after user_config hooks"
 
 	display_alert "Extensions: prepare configuration" "extension_prepare_config" "debug"
 	call_extension_method "extension_prepare_config" <<- 'EXTENSION_PREPARE_CONFIG'
@@ -367,6 +380,7 @@ function do_extra_configuration() {
 		Implementors should preserve variable values pre-set, but can default values an/or validate them.
 		This runs *after* user_config. Don't change anything not coming from other variables or meant to be configured by the user.
 	EXTENSION_PREPARE_CONFIG
+	track_general_config_variables "after extension_prepare_config hooks"
 
 	error_if_lib_tag_set # make sure users are not thrown off by using old parameter which does nothing anymore
 
@@ -485,15 +499,19 @@ function source_family_config_and_arch() {
 		fi
 	fi
 
+	track_general_config_variables "after sourcing family config"
+
 	# load "all-around common arch defaults" common.conf
 	display_alert "Sourcing common arch configuration" "common.conf" "debug"
 	# shellcheck source=config/sources/common.conf
 	source "${SRC}/config/sources/common.conf"
+	track_general_config_variables "after sourcing common arch"
 
 	# load architecture defaults
 	display_alert "Sourcing arch configuration" "${ARCH}.conf" "info"
 	# shellcheck source=/dev/null
 	source "${SRC}/config/sources/${ARCH}.conf"
+	track_general_config_variables "after sourcing ${ARCH} arch"
 
 	return 0
 }
@@ -505,5 +523,50 @@ function set_git_build_repo_url_and_commit_vars() {
 	BUILD_REPOSITORY_COMMIT="$(git -C "${SRC}" describe --match=d_e_a_d_b_e_e_f --always --dirty || true)"             # ignore error
 	display_alert "BUILD_REPOSITORY_URL set during ${1}" "${BUILD_REPOSITORY_URL}" "debug"
 	display_alert "BUILD_REPOSITORY_COMMIT set during ${1}" "${BUILD_REPOSITORY_COMMIT}" "debug"
+	return 0
+}
+
+function check_filesystem_compatibility_on_host() {
+	if [[ -f "/proc/filesystems" ]]; then
+			# Check if the filesystem is listed in /proc/filesystems
+		if ! grep -q "\<$ROOTFS_TYPE\>" /proc/filesystems; then		# ensure exact match with \<...\>
+			# Try modprobing the fs module since it doesn't show up in /proc/filesystems if it's an unloaded module versus built-in
+			if ! modprobe "$ROOTFS_TYPE"; then
+				exit_with_error "Filesystem type unsupported by build host:" "$ROOTFS_TYPE"
+			else
+				display_alert "Sucessfully loaded kernel module for filesystem" "$ROOTFS_TYPE" ""
+			fi
+		fi
+
+		# For f2fs, check if support for extended attributes is enabled in kernel config (otherwise will fail later when using rsync)
+		if [ "$ROOTFS_TYPE" = "f2fs" ]; then
+			local build_host_kernel_config=""
+
+			# Try to find kernel config in different places
+			if [ -f "/boot/config-$(uname -r)" ]; then
+				build_host_kernel_config="/boot/config-$(uname -r)"
+			elif [ -f "/proc/config.gz" ]; then
+				# Try to extract kernel config from /proc/config.gz
+				if command -v gzip &> /dev/null; then
+					gzip -dc /proc/config.gz > /tmp/build_host_kernel_config
+					build_host_kernel_config="/tmp/build_host_kernel_config"
+				else
+					display_alert "Could extract kernel config from build host, please install 'gzip'." "Build might fail in case of missing kernel configs for '${ROOTFS_TYPE}'" "wrn"
+				fi
+			else
+				display_alert "Could not find kernel config of build host." "Build might fail in case of missing kernel configs for '${ROOTFS_TYPE}'." "wrn"
+			fi
+
+			# Check if required configurations are set
+			if [ -n "$build_host_kernel_config" ]; then
+				if ! grep -q '^CONFIG_F2FS_FS_XATTR=y$' "$build_host_kernel_config" || \
+				! grep -q '^CONFIG_F2FS_FS_SECURITY=y$' "$build_host_kernel_config"; then
+					exit_with_error "Required kernel configurations for f2fs filesystem not enabled." "Please enable CONFIG_F2FS_FS_XATTR and CONFIG_F2FS_FS_SECURITY in your kernel configuration." "err"
+				fi
+			fi
+		fi
+	else
+		display_alert "Could not check filesystem support via /proc/filesystems on build host." "Build might fail in case of unsupported rootfs type." "wrn"
+	fi
 	return 0
 }
